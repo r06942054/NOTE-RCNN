@@ -21,6 +21,7 @@ from nets.vgg16 import vgg16
 from nets.resnet_v1 import resnetv1
 from nets.mobilenet_v1 import mobilenetv1
 
+from utils.statistic_bbox import statistic_bbox
 
 def parse_args():
     """
@@ -55,6 +56,12 @@ def parse_args():
         dest='max_iters',
         help='number of iterations to train',
         default=70000,
+        type=int)
+    parser.add_argument(
+        '--seedpercen',
+        dest='seed_percentage',
+        help='number of seed image percentage',
+        default=20,
         type=int)
     parser.add_argument(
         '--tag', dest='tag', help='tag of the model', default=None, type=str)
@@ -123,6 +130,18 @@ if __name__ == '__main__':
     # train set
     imdb, roidb = combined_roidb(args.imdb_name)
     print('{:d} roidb entries'.format(len(roidb)))
+
+    # split seed data and image-level data
+    roidb_noflip = roidb[0:int(len(roidb)/2)]
+    roidb_flip = roidb[int(len(roidb)/2):]
+    index = np.random.permutation(len(roidb_noflip))
+    index_seed = sorted(index[0:int(len(roidb_noflip) * args.seed_percentage / 100)])
+    index_im = sorted(index[int(len(roidb_noflip) * args.seed_percentage / 100):])
+    roidb_im = list(np.array(roidb_noflip)[index_im]) + list(np.array(roidb_flip)[index_im])
+    roidb = list(np.array(roidb_noflip)[index_seed]) + list(np.array(roidb_flip)[index_seed])
+    print('{:d} seed roidb entries'.format(len(roidb)))
+    print('{:d} image-level roidb entries'.format(len(roidb_im)))
+    statistic_bbox(roidb, roidb_im)
 
     # output directory where the models are saved
     output_dir = get_output_dir(imdb, args.tag)
