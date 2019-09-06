@@ -143,6 +143,15 @@ if __name__ == '__main__':
     print('{:d} image-level roidb entries'.format(len(roidb_im)))
     statistic_bbox(roidb, roidb_im)
 
+    # add data_type to roidb and roidb_im
+    # set roidb data_type = 'seed'
+    for i in range(len(roidb)):
+        roidb[i]['data_type'] = 'seed'
+    # set roidb_im data_type = 'image-level' and add image-level labels
+    for i in range(len(roidb_im)):
+        roidb_im[i]['data_type'] = 'image-level'
+        roidb_im[i]['image-label'] = np.unique(roidb_im[i]['gt_classes'])
+
     # output directory where the models are saved
     output_dir = get_output_dir(imdb, args.tag)
     print('Output will be saved to `{:s}`'.format(output_dir))
