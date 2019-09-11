@@ -50,6 +50,12 @@ def get_minibatch(roidb, num_classes):
     blobs['im_info'] = np.array(
         [im_blob.shape[1], im_blob.shape[2], im_scales[0]], dtype=np.float32)
 
+    if roidb[0]['data_type'] == 'image-level':
+        blobs['seed_or_mined'] = 'mined'
+        blobs['pred_score'] = roidb[0]['pred_score']
+    else:
+        blobs['seed_or_mined'] = 'seed'
+    
     return blobs
 
 
