@@ -327,12 +327,17 @@ class Network(nn.Module):
         self.rpn_net = nn.Conv2d(
             self._net_conv_channels, cfg.RPN_CHANNELS, [3, 3], padding=1)
 
+        self.rpn_cls_a_score_net = nn.Conv2d(cfg.RPN_CHANNELS,
+                                           self._num_anchors * 2, [1, 1])       # for NOTE-RCNN
+        
         self.rpn_cls_score_net = nn.Conv2d(cfg.RPN_CHANNELS,
                                            self._num_anchors * 2, [1, 1])
 
         self.rpn_bbox_pred_net = nn.Conv2d(cfg.RPN_CHANNELS,
                                            self._num_anchors * 4, [1, 1])
 
+        self.cls_a_score_net = nn.Linear(self._fc7_channels, self._num_classes) # for NOTE-RCNN
+        
         self.cls_score_net = nn.Linear(self._fc7_channels, self._num_classes)
         self.bbox_pred_net = nn.Linear(self._fc7_channels,
                                        self._num_classes * 4)
@@ -420,8 +425,8 @@ class Network(nn.Module):
     def init_weights(self):
         def normal_init(m, mean, stddev, truncated=False):
             """
-      weight initalizer: truncated normal and random normal.
-      """
+            weight initalizer: truncated normal and random normal.
+            """
             # x is a parameter
             if truncated:
                 m.weight.data.normal_().fmod_(2).mul_(stddev).add_(
@@ -431,8 +436,10 @@ class Network(nn.Module):
             m.bias.data.zero_()
 
         normal_init(self.rpn_net, 0, 0.01, cfg.TRAIN.TRUNCATED)
+        normal_init(self.rpn_cls_a_score_net, 0, 0.01, cfg.TRAIN.TRUNCATED)
         normal_init(self.rpn_cls_score_net, 0, 0.01, cfg.TRAIN.TRUNCATED)
         normal_init(self.rpn_bbox_pred_net, 0, 0.01, cfg.TRAIN.TRUNCATED)
+        normal_init(self.cls_a_score_net, 0, 0.01, cfg.TRAIN.TRUNCATED)
         normal_init(self.cls_score_net, 0, 0.01, cfg.TRAIN.TRUNCATED)
         normal_init(self.bbox_pred_net, 0, 0.001, cfg.TRAIN.TRUNCATED)
 
