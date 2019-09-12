@@ -166,6 +166,9 @@ if __name__ == '__main__':
     _, valroidb = combined_roidb(args.imdbval_name)
     print('{:d} validation roidb entries'.format(len(valroidb)))
     cfg.TRAIN.USE_FLIPPED = orgflip
+    # set roidb data_type = 'seed'
+    for i in range(len(valroidb)):
+        valroidb[i]['data_type'] = 'seed'
 
     # load network
     if args.net == 'vgg16':

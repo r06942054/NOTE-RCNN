@@ -159,6 +159,69 @@ class SolverWrapper(object):
         self.valwriter = tb.writer.FileWriter(self.tbvaldir)
 
         return lr, self.optimizer
+    
+    def train_op_notercnn(self, seed_or_mined):
+        layer = []
+        if seed_or_mined == 'seed':
+            # same as construct_graph()
+            # Set learning rate and momentum
+            lr = cfg.TRAIN.LEARNING_RATE
+            params = []
+            for key, value in dict(self.net.named_parameters()).items():
+                layer.append(key)
+                if value.requires_grad:
+                    if 'bias' in key:
+                        params += [{
+                            'params': [value],
+                            'lr':
+                            lr * (cfg.TRAIN.DOUBLE_BIAS + 1),
+                            'weight_decay':
+                            cfg.TRAIN.BIAS_DECAY and cfg.TRAIN.WEIGHT_DECAY or 0
+                        }]
+                    else:
+                        params += [{
+                            'params': [value],
+                            'lr':
+                            lr,
+                            'weight_decay':
+                            getattr(value, 'weight_decay', cfg.TRAIN.WEIGHT_DECAY)
+                        }]
+            self.optimizer = torch.optim.SGD(params, momentum=cfg.TRAIN.MOMENTUM)
+            return self.optimizer
+        else:
+            # if seed_or_mined== mined then remove layers: 
+            # cls_score_net.weight、cls_score_net.bias、bbox_pred_net.weight、bbox_pred_net.bias
+            # rpn_cls_score_net.weight、rpn_cls_score_net.bias、rpn_bbox_pred_net.weight、rpn_bbox_pred_net.bias
+            remove_list = ['cls_score_net.weight', 'cls_score_net.bias', 'bbox_pred_net.weight', 'bbox_pred_net.bias',
+                           'rpn_cls_score_net.weight', 'rpn_cls_score_net.bias', 'rpn_bbox_pred_net.weight', 'rpn_bbox_pred_net.bias']
+            
+            # Set learning rate and momentum
+            lr = cfg.TRAIN.LEARNING_RATE
+            params = []
+            for key, value in dict(self.net.named_parameters()).items():
+                if key in remove_list:
+                    continue
+                
+                layer.append(key)
+                if value.requires_grad:
+                    if 'bias' in key:
+                        params += [{
+                            'params': [value],
+                            'lr':
+                            lr * (cfg.TRAIN.DOUBLE_BIAS + 1),
+                            'weight_decay':
+                            cfg.TRAIN.BIAS_DECAY and cfg.TRAIN.WEIGHT_DECAY or 0
+                        }]
+                    else:
+                        params += [{
+                            'params': [value],
+                            'lr':
+                            lr,
+                            'weight_decay':
+                            getattr(value, 'weight_decay', cfg.TRAIN.WEIGHT_DECAY)
+                        }]
+            self.optimizer = torch.optim.SGD(params, momentum=cfg.TRAIN.MOMENTUM)
+            return self.optimizer
 
     def find_previous(self):
         sfiles = os.path.join(self.output_dir,
@@ -278,12 +341,18 @@ class SolverWrapper(object):
             utils.timer.timer.tic()
             # Get training data, one batch at a time
             blobs = self.data_layer.forward()
+            
+            # fix rpn-cls and det-cls when seed_or_mined=='mined' because NOTE-RCNN
+            if blobs['seed_or_mined'] == 'seed':
+                train_op = self.train_op_notercnn('seed')
+            else:
+                train_op = self.train_op_notercnn('mined')
 
             now = time.time()
             if iter == 1 or now - last_summary_time > cfg.TRAIN.SUMMARY_INTERVAL:
                 # Compute the graph with summary
-                rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, total_loss, summary = \
-                  self.net.train_step_with_summary(blobs, self.optimizer)
+                rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, total_loss, summary, rpn_loss_cls_a, loss_cls_a = \
+                    self.net.train_step_with_summary(blobs, self.optimizer)
                 for _sum in summary:
                     self.writer.add_summary(_sum, float(iter))
                 # Also check the summary on the validation set
@@ -294,15 +363,15 @@ class SolverWrapper(object):
                 last_summary_time = now
             else:
                 # Compute the graph without summary
-                rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, total_loss = \
-                  self.net.train_step(blobs, self.optimizer)
+                rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, total_loss, rpn_loss_cls_a, loss_cls_a = \
+                    self.net.train_step(blobs, self.optimizer)
             utils.timer.timer.toc()
 
             # Display training information
             if iter % (cfg.TRAIN.DISPLAY) == 0:
-                print('iter: %d / %d, total loss: %.6f\n >>> rpn_loss_cls: %.6f\n '
-                      '>>> rpn_loss_box: %.6f\n >>> loss_cls: %.6f\n >>> loss_box: %.6f\n >>> lr: %f' % \
-                      (iter, max_iters, total_loss, rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, lr))
+                print('iter: %d / %d, total loss: %.6f\n >>> rpn_loss_cls: %.6f\n >>> rpn_loss_cls_a: %.6f\n '
+                      '>>> rpn_loss_box: %.6f\n >>> loss_cls: %.6f\n >>> loss_cls_a: %.6f\n >>> loss_box: %.6f\n >>> lr: %f' % \
+                      (iter, max_iters, total_loss, rpn_loss_cls, rpn_loss_cls_a, rpn_loss_box,  loss_cls, loss_cls_a, loss_box, lr))
                 print('speed: {:.3f}s / iter'.format(
                     utils.timer.timer.average_time()))
 

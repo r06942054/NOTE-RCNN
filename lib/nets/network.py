@@ -48,6 +48,7 @@ class Network(nn.Module):
         self._image_gt_summaries = {}
         self._variables_to_fix = {}
         self._device = 'cuda'
+        self.seed_or_mined = 'seed'
 
     def _add_gt_image(self):
         # add back mean
@@ -81,15 +82,17 @@ class Network(nn.Module):
         return tb.summary.histogram(
             'TRAIN/' + key, var.data.cpu().numpy(), bins='auto')
 
-    def _proposal_top_layer(self, rpn_cls_prob, rpn_bbox_pred):
+    def _proposal_top_layer(self, rpn_cls_prob, rpn_cls_a_prob, rpn_bbox_pred):
         rois, rpn_scores = proposal_top_layer(\
-                                        rpn_cls_prob, rpn_bbox_pred, self._im_info,
+                                        rpn_cls_prob, rpn_cls_a_prob, rpn_bbox_pred, self._im_info,
                                          self._feat_stride, self._anchors, self._num_anchors)
         return rois, rpn_scores
 
-    def _proposal_layer(self, rpn_cls_prob, rpn_bbox_pred):
+    def _proposal_layer(self, rpn_cls_prob, rpn_cls_a_prob, rpn_bbox_pred):
+        # Training: proposal_layer取前分數前12000的box做nms後再挑前2000個分數高的box
+        # Testing: proposal_layer取前分數前6000的box做nms後再挑前300個分數高的box
         rois, rpn_scores = proposal_layer(\
-                                        rpn_cls_prob, rpn_bbox_pred, self._im_info, self._mode,
+                                        rpn_cls_prob, rpn_cls_a_prob, rpn_bbox_pred, self._im_info, self._mode,
                                          self._feat_stride, self._anchors, self._num_anchors)
 
         return rois, rpn_scores
@@ -102,10 +105,15 @@ class Network(nn.Module):
         return RoIAlign((cfg.POOLING_SIZE, cfg.POOLING_SIZE), 1.0 / 16.0,
                         0)(bottom, rois)
 
-    def _anchor_target_layer(self, rpn_cls_score):
+    def _anchor_target_layer(self, rpn_cls_score, rpn_cls_a_score):
         rpn_labels, rpn_bbox_targets, rpn_bbox_inside_weights, rpn_bbox_outside_weights = \
-          anchor_target_layer(
-          rpn_cls_score.data, self._gt_boxes.data.cpu().numpy(), self._im_info, self._feat_stride, self._anchors.data.cpu().numpy(), self._num_anchors)
+            anchor_target_layer(rpn_cls_score.data,
+                                rpn_cls_a_score.data,
+                                self._gt_boxes.data.cpu().numpy(),
+                                self._im_info,
+                                self._feat_stride,
+                                self._anchors.data.cpu().numpy(),
+                                self._num_anchors)
 
         rpn_labels = torch.from_numpy(rpn_labels).float().to(
             self._device)  #.set_shape([1, 1, None, None])
@@ -113,30 +121,25 @@ class Network(nn.Module):
             self._device)  #.set_shape([1, None, None, self._num_anchors * 4])
         rpn_bbox_inside_weights = torch.from_numpy(
             rpn_bbox_inside_weights).float().to(
-                self.
-                _device)  #.set_shape([1, None, None, self._num_anchors * 4])
+                self._device)  #.set_shape([1, None, None, self._num_anchors * 4])
         rpn_bbox_outside_weights = torch.from_numpy(
             rpn_bbox_outside_weights).float().to(
-                self.
-                _device)  #.set_shape([1, None, None, self._num_anchors * 4])
+                self._device)  #.set_shape([1, None, None, self._num_anchors * 4])
 
         rpn_labels = rpn_labels.long()
         self._anchor_targets['rpn_labels'] = rpn_labels
         self._anchor_targets['rpn_bbox_targets'] = rpn_bbox_targets
-        self._anchor_targets[
-            'rpn_bbox_inside_weights'] = rpn_bbox_inside_weights
-        self._anchor_targets[
-            'rpn_bbox_outside_weights'] = rpn_bbox_outside_weights
+        self._anchor_targets['rpn_bbox_inside_weights'] = rpn_bbox_inside_weights
+        self._anchor_targets['rpn_bbox_outside_weights'] = rpn_bbox_outside_weights
 
         for k in self._anchor_targets.keys():
             self._score_summaries[k] = self._anchor_targets[k]
 
         return rpn_labels
-
+    
     def _proposal_target_layer(self, rois, roi_scores):
         rois, roi_scores, labels, bbox_targets, bbox_inside_weights, bbox_outside_weights = \
-          proposal_target_layer(
-          rois, roi_scores, self._gt_boxes, self._num_classes)
+          proposal_target_layer(rois, roi_scores, self._gt_boxes, self._num_classes)
 
         self._proposal_targets['rois'] = rois
         self._proposal_targets['labels'] = labels.long()
@@ -189,7 +192,17 @@ class Network(nn.Module):
             0, rpn_select).contiguous().view(-1, 2)
         rpn_label = rpn_label.index_select(0, rpn_select).contiguous().view(-1)
         rpn_cross_entropy = F.cross_entropy(rpn_cls_score, rpn_label)
-
+        
+        # RPN, class-a loss
+        rpn_cls_a_score = self._predictions['rpn_cls_a_score_reshape'].view(-1, 2)
+        rpn_label = self._anchor_targets['rpn_labels'].view(-1)
+        rpn_select = (rpn_label.data != -1).nonzero().view(-1)
+        rpn_cls_a_score = rpn_cls_a_score.index_select(
+            0, rpn_select).contiguous().view(-1, 2)
+        rpn_label = rpn_label.index_select(0, rpn_select).contiguous().view(-1)
+        rpn_a_cross_entropy = F.cross_entropy(rpn_cls_a_score, rpn_label)
+        
+        
         # RPN, bbox loss
         rpn_bbox_pred = self._predictions['rpn_bbox_pred']
         rpn_bbox_targets = self._anchor_targets['rpn_bbox_targets']
@@ -210,6 +223,16 @@ class Network(nn.Module):
         label = self._proposal_targets["labels"].view(-1)
         cross_entropy = F.cross_entropy(
             cls_score.view(-1, self._num_classes), label)
+        
+        # RCNN, class-a loss
+        cls_a_score = self._predictions["cls_a_score"]
+        label = self._proposal_targets["labels"].view(-1)
+        if self.seed_or_mined == 'seed':
+            mask = torch.FloatTensor([1] + [1] * 20).cuda()
+        else:
+            mask = torch.FloatTensor([0] + [1] * 20).cuda()
+        a_cross_entropy = F.cross_entropy(
+            cls_a_score.view(-1, self._num_classes), label, mask)
 
         # RCNN, bbox loss
         bbox_pred = self._predictions['bbox_pred']
@@ -220,11 +243,13 @@ class Network(nn.Module):
             bbox_pred, bbox_targets, bbox_inside_weights, bbox_outside_weights)
 
         self._losses['cross_entropy'] = cross_entropy
+        self._losses['a_cross_entropy'] = a_cross_entropy
         self._losses['loss_box'] = loss_box
         self._losses['rpn_cross_entropy'] = rpn_cross_entropy
+        self._losses['rpn_a_cross_entropy'] = rpn_a_cross_entropy
         self._losses['rpn_loss_box'] = rpn_loss_box
 
-        loss = cross_entropy + loss_box + rpn_cross_entropy + rpn_loss_box
+        loss = cross_entropy + a_cross_entropy + loss_box + rpn_cross_entropy + rpn_a_cross_entropy + rpn_loss_box 
         self._losses['total_loss'] = loss
 
         for k in self._losses.keys():
@@ -236,8 +261,8 @@ class Network(nn.Module):
         rpn = F.relu(self.rpn_net(net_conv))
         self._act_summaries['rpn'] = rpn
 
-        rpn_cls_score = self.rpn_cls_score_net(
-            rpn)  # batch * (num_anchors * 2) * h * w
+        # for rpn-cls
+        rpn_cls_score = self.rpn_cls_score_net(rpn)  # batch * (num_anchors * 2) * h * w
 
         # change it so that the score has 2 as its channel size
         rpn_cls_score_reshape = rpn_cls_score.view(
@@ -254,20 +279,45 @@ class Network(nn.Module):
             0, 2, 3, 1).contiguous()  # batch * (num_anchors*h) * w * 2
         rpn_cls_pred = torch.max(rpn_cls_score_reshape.view(-1, 2), 1)[1]
 
+        
+        # for rpn-cls-a
+        rpn_cls_a_score = self.rpn_cls_a_score_net(rpn)  # batch * (num_anchors * 2) * h * w
+        
+        # change it so that the score has 2 as its channel size
+        rpn_cls_a_score_reshape = rpn_cls_a_score.view(
+            1, 2, -1,
+            rpn_cls_a_score.size()[-1])  # batch * 2 * (num_anchors*h) * w
+        rpn_cls_a_prob_reshape = F.softmax(rpn_cls_a_score_reshape, dim=1)
+        
+        # Move channel to the last dimenstion, to fit the input of python functions
+        rpn_cls_a_prob = rpn_cls_a_prob_reshape.view_as(rpn_cls_a_score).permute(
+            0, 2, 3, 1)  # batch * h * w * (num_anchors * 2)
+        rpn_cls_a_score = rpn_cls_a_score.permute(
+            0, 2, 3, 1)  # batch * h * w * (num_anchors * 2)
+        rpn_cls_a_score_reshape = rpn_cls_a_score_reshape.permute(
+            0, 2, 3, 1).contiguous()  # batch * (num_anchors*h) * w * 2
+        rpn_cls_a_pred = torch.max(rpn_cls_a_score_reshape.view(-1, 2), 1)[1]
+        
         rpn_bbox_pred = self.rpn_bbox_pred_net(rpn)
         rpn_bbox_pred = rpn_bbox_pred.permute(
             0, 2, 3, 1).contiguous()  # batch * h * w * (num_anchors*4)
 
         if self._mode == 'TRAIN':
+            # get 2000 rois and scores
             rois, roi_scores = self._proposal_layer(
-                rpn_cls_prob, rpn_bbox_pred)  # rois, roi_scores are varible
-            rpn_labels = self._anchor_target_layer(rpn_cls_score)
+                rpn_cls_prob, rpn_cls_a_prob, rpn_bbox_pred)  # rois, roi_scores are varible
+            
+            # get all labels of proposals (about 20000 labels)
+            # 0 negative, 1 positive, -1 don't care
+            rpn_labels = self._anchor_target_layer(rpn_cls_score, rpn_cls_a_prob)
+
             rois, _ = self._proposal_target_layer(rois, roi_scores)
         else:
             if cfg.TEST.MODE == 'nms':
-                rois, _ = self._proposal_layer(rpn_cls_prob, rpn_bbox_pred)
+                # get 300 rois (sorted by scores)
+                rois, roi_scores = self._proposal_layer(rpn_cls_prob, rpn_cls_a_prob, rpn_bbox_pred)
             elif cfg.TEST.MODE == 'top':
-                rois, _ = self._proposal_top_layer(rpn_cls_prob, rpn_bbox_pred)
+                rois, _ = self._proposal_top_layer(rpn_cls_prob, rpn_cls_a_prob, rpn_bbox_pred)
             else:
                 raise NotImplementedError
 
@@ -275,8 +325,16 @@ class Network(nn.Module):
         self._predictions["rpn_cls_score_reshape"] = rpn_cls_score_reshape
         self._predictions["rpn_cls_prob"] = rpn_cls_prob
         self._predictions["rpn_cls_pred"] = rpn_cls_pred
+        
+        self._predictions["rpn_cls_a_score"] = rpn_cls_a_score
+        self._predictions["rpn_cls_a_score_reshape"] = rpn_cls_a_score_reshape
+        self._predictions["rpn_cls_a_prob"] = rpn_cls_a_prob
+        self._predictions["rpn_cls_a_pred"] = rpn_cls_a_pred
+        
         self._predictions["rpn_bbox_pred"] = rpn_bbox_pred
         self._predictions["rois"] = rois
+        
+        self._predictions["roi_scores"] = roi_scores
 
         return rois
 
@@ -285,13 +343,21 @@ class Network(nn.Module):
         cls_pred = torch.max(cls_score, 1)[1]
         cls_prob = F.softmax(cls_score, dim=1)
         bbox_pred = self.bbox_pred_net(fc7)
+        
+        cls_a_score = self.cls_a_score_net(fc7)
+        cls_a_pred = torch.max(cls_a_score, 1)[1]
+        cls_a_prob = F.softmax(cls_a_score, dim=1)
 
         self._predictions["cls_score"] = cls_score
         self._predictions["cls_pred"] = cls_pred
         self._predictions["cls_prob"] = cls_prob
         self._predictions["bbox_pred"] = bbox_pred
+        
+        self._predictions["cls_a_score"] = cls_a_score
+        self._predictions["cls_a_pred"] = cls_a_pred
+        self._predictions["cls_a_prob"] = cls_a_prob
 
-        return cls_prob, bbox_pred
+        return cls_prob, cls_a_prob, bbox_pred
 
     def _image_to_head(self):
         raise NotImplementedError
@@ -356,6 +422,7 @@ class Network(nn.Module):
             summaries.append(tb.summary.scalar(key, var.item()))
         self._event_summaries = {}
         if not val:
+            '''
             # Add score summaries
             for key, var in self._score_summaries.items():
                 summaries.append(self._add_score_summary(key, var))
@@ -368,6 +435,7 @@ class Network(nn.Module):
             for k, var in dict(self.named_parameters()).items():
                 if var.requires_grad:
                     summaries.append(self._add_train_summary(k, var))
+            '''
 
             self._image_gt_summaries = {}
 
@@ -376,6 +444,7 @@ class Network(nn.Module):
     def _predict(self):
         # This is just _build_network in tf-faster-rcnn
         torch.backends.cudnn.benchmark = False
+        # To get feature map for a image
         net_conv = self._image_to_head()
 
         # build the anchors for the image
@@ -391,12 +460,12 @@ class Network(nn.Module):
             torch.backends.cudnn.benchmark = True  # benchmark because now the input size are fixed
         fc7 = self._head_to_tail(pool5)
 
-        cls_prob, bbox_pred = self._region_classification(fc7)
+        cls_prob, cls_a_prob, bbox_pred = self._region_classification(fc7)
 
         for k in self._predictions.keys():
             self._score_summaries[k] = self._predictions[k]
 
-        return rois, cls_prob, bbox_pred
+        return rois, cls_prob, cls_a_prob, bbox_pred
 
     def forward(self, image, im_info, gt_boxes=None, mode='TRAIN'):
         self._image_gt_summaries['image'] = image
@@ -411,7 +480,7 @@ class Network(nn.Module):
 
         self._mode = mode
 
-        rois, cls_prob, bbox_pred = self._predict()
+        rois, cls_prob, cls_a_prob, bbox_pred = self._predict()
 
         if mode == 'TEST':
             stds = bbox_pred.data.new(cfg.TRAIN.BBOX_NORMALIZE_STDS).repeat(
@@ -455,12 +524,17 @@ class Network(nn.Module):
         self.eval()
         with torch.no_grad():
             self.forward(image, im_info, None, mode='TEST')
-        cls_score, cls_prob, bbox_pred, rois = self._predictions["cls_score"].data.cpu().numpy(), \
-                                                         self._predictions['cls_prob'].data.cpu().numpy(), \
-                                                         self._predictions['bbox_pred'].data.cpu().numpy(), \
-                                                         self._predictions['rois'].data.cpu().numpy()
-        return cls_score, cls_prob, bbox_pred, rois
-
+        cls_score, cls_prob, bbox_pred, rois, cls_a_score, cls_a_prob= self._predictions["cls_score"].data.cpu().numpy(), \
+                                                            self._predictions['cls_prob'].data.cpu().numpy(), \
+                                                            self._predictions['bbox_pred'].data.cpu().numpy(), \
+                                                            self._predictions['rois'].data.cpu().numpy(), \
+                                                            self._predictions["cls_a_score"].data.cpu().numpy(), \
+                                                            self._predictions['cls_a_prob'].data.cpu().numpy()
+        cls_prob_avg = (cls_prob + cls_a_prob) / 2
+        cls_score_avg = (cls_score + cls_a_score) / 2
+        
+        return cls_score_avg, cls_prob_avg, bbox_pred, rois
+    
     def delete_intermediate_states(self):
         # Delete intermediate result to save memory
         for d in [
@@ -479,12 +553,20 @@ class Network(nn.Module):
         return summary
 
     def train_step(self, blobs, train_op):
+        if blobs['seed_or_mined'] == 'seed':
+            self.seed_or_mined = 'seed'
+        else:
+            self.seed_or_mined = 'mined'
+            self.pred_score = blobs['pred_score']
+            
         self.forward(blobs['data'], blobs['im_info'], blobs['gt_boxes'])
-        rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, loss = self._losses["rpn_cross_entropy"].item(), \
+        rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, loss, rpn_loss_cls_a, loss_cls_a = self._losses["rpn_cross_entropy"].item(), \
                                                                             self._losses['rpn_loss_box'].item(), \
                                                                             self._losses['cross_entropy'].item(), \
                                                                             self._losses['loss_box'].item(), \
-                                                                            self._losses['total_loss'].item()
+                                                                            self._losses['total_loss'].item(), \
+                                                                            self._losses['rpn_a_cross_entropy'].item(), \
+                                                                            self._losses['a_cross_entropy'].item()
         #utils.timer.timer.tic('backward')
         train_op.zero_grad()
         self._losses['total_loss'].backward()
@@ -493,15 +575,23 @@ class Network(nn.Module):
 
         self.delete_intermediate_states()
 
-        return rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, loss
+        return rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, loss, rpn_loss_cls_a, loss_cls_a
 
     def train_step_with_summary(self, blobs, train_op):
+        if blobs['seed_or_mined'] == 'seed':
+            self.seed_or_mined = 'seed'
+        else:
+            self.seed_or_mined = 'mined'
+            self.pred_score = blobs['pred_score']
+            
         self.forward(blobs['data'], blobs['im_info'], blobs['gt_boxes'])
-        rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, loss = self._losses["rpn_cross_entropy"].item(), \
+        rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, loss, rpn_loss_cls_a, loss_cls_a = self._losses["rpn_cross_entropy"].item(), \
                                                                             self._losses['rpn_loss_box'].item(), \
                                                                             self._losses['cross_entropy'].item(), \
                                                                             self._losses['loss_box'].item(), \
-                                                                            self._losses['total_loss'].item()
+                                                                            self._losses['total_loss'].item(), \
+                                                                            self._losses['rpn_a_cross_entropy'].item(), \
+                                                                            self._losses['a_cross_entropy'].item()
         train_op.zero_grad()
         self._losses['total_loss'].backward()
         train_op.step()
@@ -509,7 +599,7 @@ class Network(nn.Module):
 
         self.delete_intermediate_states()
 
-        return rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, loss, summary
+        return rpn_loss_cls, rpn_loss_box, loss_cls, loss_box, loss, summary, rpn_loss_cls_a, loss_cls_a
 
     def train_step_no_return(self, blobs, train_op):
         self.forward(blobs['data'], blobs['im_info'], blobs['gt_boxes'])

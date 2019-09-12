@@ -17,7 +17,7 @@ from model.bbox_transform import bbox_transform
 import torch
 
 
-def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride,
+def anchor_target_layer(rpn_cls_score, rpn_cls_a_score, gt_boxes, im_info, _feat_stride,
                         all_anchors, num_anchors):
     """Same as the anchor target layer in original Fast/er RCNN """
     A = num_anchors

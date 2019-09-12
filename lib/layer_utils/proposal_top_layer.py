@@ -23,7 +23,7 @@ def proposal_top_layer(rpn_cls_prob, rpn_bbox_pred, im_info, _feat_stride,
   """
     rpn_top_n = cfg.TEST.RPN_TOP_N
 
-    scores = rpn_cls_prob[:, :, :, num_anchors:]
+    scores = (rpn_cls_prob[:, :, :, num_anchors:] + rpn_cls_a_prob[:, :, :, num_anchors:])/2
 
     rpn_bbox_pred = rpn_bbox_pred.view(-1, 4)
     scores = scores.contiguous().view(-1, 1)
