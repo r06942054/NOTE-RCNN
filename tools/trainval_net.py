@@ -52,10 +52,10 @@ def parse_args():
         default='voc_2007_test',
         type=str)
     parser.add_argument(
-        '--iters',
-        dest='max_iters',
-        help='number of iterations to train',
-        default=70000,
+        '--epochs',
+        dest='epochs',
+        help='number of epochs to train',
+        default=20,
         type=int)
     parser.add_argument(
         '--seedpercen',
@@ -192,4 +192,4 @@ if __name__ == '__main__':
         output_dir,
         tb_dir,
         pretrained_model=args.weight,
-        max_iters=args.max_iters)
+        max_iters=len(roidb) * args.epochs)
