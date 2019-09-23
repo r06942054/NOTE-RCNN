@@ -331,17 +331,17 @@ class SolverWrapper(object):
 
         while iter < max_iters + 1:
             # Learning rate
-            if iter == next_stepsize + 1:
+            #if iter == next_stepsize + 1:
                 # Add snapshot here before reducing the learning rate
-                self.snapshot(iter)
-                lr *= cfg.TRAIN.GAMMA
-                scale_lr(self.optimizer, cfg.TRAIN.GAMMA)
-                next_stepsize = stepsizes.pop()
+            #    self.snapshot(iter)
+            #    lr *= cfg.TRAIN.GAMMA
+            #    scale_lr(self.optimizer, cfg.TRAIN.GAMMA)
+            #    next_stepsize = stepsizes.pop()
 
             utils.timer.timer.tic()
             # Get training data, one batch at a time
             blobs = self.data_layer.forward()
-            
+
             # fix rpn-cls and det-cls when seed_or_mined=='mined' because NOTE-RCNN
             if blobs['seed_or_mined'] == 'seed':
                 train_op = self.train_op_notercnn('seed')
