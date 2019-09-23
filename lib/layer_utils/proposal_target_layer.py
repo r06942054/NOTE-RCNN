@@ -104,8 +104,8 @@ def _compute_targets(ex_rois, gt_rois, labels):
 def _sample_rois(all_rois, all_scores, gt_boxes, fg_rois_per_image,
                  rois_per_image, num_classes):
     """Generate a random sample of RoIs comprising foreground and background
-  examples.
-  """
+    examples.
+    """
     # overlaps: (rois x gt_boxes)
     overlaps = bbox_overlaps(all_rois[:, 1:5].data, gt_boxes[:, :4].data)
     max_overlaps, gt_assignment = overlaps.max(1)
