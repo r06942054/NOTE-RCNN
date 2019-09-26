@@ -114,10 +114,10 @@ class SolverWrapper(object):
             last_snapshot_iter = pickle.load(fid)
 
             np.random.set_state(st0)
-            self.data_layer._cur = cur
-            self.data_layer._perm = perm
-            self.data_layer_val._cur = cur_val
-            self.data_layer_val._perm = perm_val
+            #self.data_layer._cur = cur
+            #self.data_layer._perm = perm
+            #self.data_layer_val._cur = cur_val
+            #self.data_layer_val._perm = perm_val
 
         return last_snapshot_iter
 
@@ -269,8 +269,10 @@ class SolverWrapper(object):
 
     def restore(self, sfile, nfile):
         # Get the most recent snapshot and restore
-        np_paths = [nfile]
-        ss_paths = [sfile]
+        #np_paths = [nfile]
+        #ss_paths = [sfile]
+        np_paths = []
+        ss_paths = []
         # Restore model from snapshots
         last_snapshot_iter = self.from_snapshot(sfile, nfile)
         # Set the learning rate
