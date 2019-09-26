@@ -22,6 +22,7 @@ from nets.resnet_v1 import resnetv1
 from nets.mobilenet_v1 import mobilenetv1
 
 from utils.statistic_bbox import statistic_bbox
+from utils.mine import mine
 
 def parse_args():
     """
@@ -58,11 +59,23 @@ def parse_args():
         default=20,
         type=int)
     parser.add_argument(
+        '--model_iters',
+        dest='model_iters',
+        help='number of model_iters to train',
+        default=5,
+        type=int)
+    parser.add_argument(
         '--seedpercen',
         dest='seed_percentage',
         help='number of seed image percentage',
         default=20,
         type=int)
+    parser.add_argument(
+        '--t_mine',
+        dest='t_mine',
+        help='threshold for mining pseudo',
+        default=0.99,
+        type=float)
     parser.add_argument(
         '--tag', dest='tag', help='tag of the model', default=None, type=str)
     parser.add_argument(
@@ -184,12 +197,39 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError
 
-    train_net(
-        net,
-        imdb,
-        roidb,
-        valroidb,
-        output_dir,
-        tb_dir,
-        pretrained_model=args.weight,
-        max_iters=len(roidb) * args.epochs)
+    # Train the model 0 ~ N (args.model_iters)
+    roidb_im_pred = []
+    steps_for_stage = []
+    total_step = 0
+    
+    for i in range(args.model_iters):
+        if i == 0:
+            iters = len(roidb) * args.epochs
+            roidb_final = roidb
+        else:
+            iters = (len(roidb_im_pred) + len(roidb)) * args.epochs
+            roidb_final = roidb + roidb_im_pred
+        print("len(roidb): ", len(roidb))    
+        print("len(roidb_im_pred): ", len(roidb_im_pred))
+        print("len(roidb_final): ", len(roidb_final))
+        total_step += iters
+        
+        steps_for_stage.append((i, total_step))
+        with open(output_dir + '/steps_for_stage.txt', 'w') as fp:
+            fp.write("iter, step\n")
+            for i, s in steps_for_stage:
+                fp.write("%s, %s\n" % (i, s))
+                
+        print("=== start training model {}, steps: {} ===".format(i, iters))
+        
+        train_net(
+            net,
+            imdb,
+            roidb_final,
+            valroidb,
+            output_dir,
+            tb_dir,
+            pretrained_model=args.weight,
+            max_iters=total_step)
+        
+        roidb_im_pred = mine(roidb_im, model_iters=i, tag=args.tag, net=net, mine_threshold=args.t_mine, classes=imdb._classes)
