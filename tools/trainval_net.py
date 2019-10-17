@@ -79,6 +79,8 @@ def parse_args():
     parser.add_argument(
         '--tag', dest='tag', help='tag of the model', default=None, type=str)
     parser.add_argument(
+        '--blur', dest='blur', default=0, type=int)
+    parser.add_argument(
         '--net',
         dest='net',
         help='vgg16, res50, res101, res152, mobile',
@@ -134,7 +136,10 @@ if __name__ == '__main__':
         cfg_from_file(args.cfg_file)
     if args.set_cfgs is not None:
         cfg_from_list(args.set_cfgs)
-
+        
+    # blur在mining外的區域 or not
+    cfg.TRAIN.BLUR = args.blur
+    
     print('Using config:')
     pprint.pprint(cfg)
 

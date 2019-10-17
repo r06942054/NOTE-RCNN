@@ -18,6 +18,9 @@ cfg = __C
 #
 __C.TRAIN = edict()
 
+# Blur kernel size
+__C.TRAIN.BLUR = 0
+
 # Initial learning rate
 __C.TRAIN.LEARNING_RATE = 0.0003
 

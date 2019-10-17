@@ -68,6 +68,21 @@ def _get_image_blob(roidb, scale_inds):
     im_scales = []
     for i in range(num_images):
         im = cv2.imread(roidb[i]['image'])
+        
+        # 如果是mining照片，且要做blur的話，則除mining的boxes外，做模糊
+        #print("cfg.TRAIN.BLUR: ", cfg.TRAIN.BLUR)
+        if roidb[i]['data_type'] == 'image-level' and cfg.TRAIN.BLUR != 0:
+            blurred_img = cv2.blur(im, (cfg.TRAIN.BLUR, cfg.TRAIN.BLUR))
+            mask = np.zeros((roidb[i]['height'], roidb[i]['width'], 3), dtype=np.uint8)
+            
+            # 掃過所有boxes，在boxes涵蓋的mask區域設為255,255,255
+            for j in range(len(roidb[i]['boxes'])):
+                (x1, y1) = roidb[i]['boxes'][j][0:2]
+                (x2, y2) = roidb[i]['boxes'][j][2:]
+                mask = cv2.rectangle(mask, (x1, y1), (x2, y2), (255, 255, 255), -1)
+        
+            im = np.where(mask==np.array([255, 255, 255]), im, blurred_img)
+        
         if roidb[i]['flipped']:
             im = im[:, ::-1, :]
         target_size = cfg.TRAIN.SCALES[scale_inds[i]]
